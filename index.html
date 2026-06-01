@@ -77,6 +77,15 @@
   .saved .clr{margin-left:auto;color:var(--danger);cursor:pointer;border:1px solid rgba(255,90,110,.3);padding:5px 9px;border-radius:7px;font-size:10px;letter-spacing:.08em;}
   .miniact{display:flex;gap:8px;margin-bottom:12px;}
   .miniact button{flex:1;background:rgba(6,16,18,.6);border:1px solid rgba(47,143,116,.2);color:var(--dim);border-radius:9px;padding:9px;font-family:var(--mono);font-size:10px;letter-spacing:.08em;cursor:pointer;}
+  .flrow{display:flex;gap:8px;margin:2px 0 8px;}
+  .flrow input{flex:1;min-width:0;background:rgba(6,16,18,.6);border:1px solid rgba(56,232,255,.3);color:var(--cyan);border-radius:9px;padding:10px 12px;font-family:var(--mono);font-size:14px;letter-spacing:.14em;text-transform:uppercase;}
+  .flrow input::placeholder{color:var(--dim);letter-spacing:.06em;text-transform:none;}
+  .flrow input:focus{outline:none;border-color:var(--cyan);box-shadow:0 0 0 2px rgba(56,232,255,.15);}
+  .flrow button{background:rgba(56,232,255,.14);border:1px solid rgba(56,232,255,.3);color:var(--cyan);border-radius:9px;padding:10px 14px;font-family:var(--mono);font-size:11px;letter-spacing:.08em;cursor:pointer;white-space:nowrap;}
+  .flrow button:disabled{opacity:.5;cursor:default;}
+  .flmsg{font-size:11px;line-height:1.5;margin:-2px 0 12px;color:var(--dim);}
+  .flmsg.ok{color:var(--mint);}
+  .flmsg.warn{color:var(--amber);}
 
   .gate{position:fixed;inset:0;z-index:30;display:flex;align-items:center;justify-content:center;padding:24px;background:radial-gradient(120% 90% at 50% 30%,#07171a,#04070a 75%);}
   .gate.hide{display:none;}
@@ -184,7 +193,12 @@
   <div class="grab"></div>
   <h2>ROTA & DETALHE OFFLINE <span class="close" id="sheetClose">✕</span></h2>
 
-  <div class="hint">Defina <b>origem</b> e <b>destino</b>: toque no botão e depois <b>toque no mapa</b>. Depois baixe o detalhe (com internet) pra usar offline no voo.</div>
+  <div class="hint">Defina <b>origem</b> e <b>destino</b>: toque no botão e depois <b>toque no mapa</b> — ou importe pelo número do voo. Depois baixe o detalhe (com internet) pra usar offline no voo.</div>
+  <div class="flrow">
+    <input id="flightNo" maxlength="8" inputmode="text" autocapitalize="characters" autocomplete="off" spellcheck="false" placeholder="nº do voo, ex.: LA8084">
+    <button id="flightGo">✈ buscar</button>
+  </div>
+  <div class="flmsg" id="flightMsg">Com internet (antes de decolar), preencha origem→destino pelo número do voo — IATA (LA8084) ou ICAO (TAM8084).</div>
   <div class="seg" id="placeSeg">
     <button data-pt="O" class="act">① ORIGEM</button>
     <button data-pt="D">② DESTINO</button>
@@ -553,12 +567,39 @@ cv.addEventListener('wheel',e=>{e.preventDefault();if(follow){follow=false;setFo
 
 // ---- route placement ----
 let placeArmed=false;
-function placeAt(lon,lat){lon=((lon+180)%360+360)%360-180;const pt={lon,lat};if(placePt==='O')O=pt;else D=pt;refreshRoute();toast((placePt==='O'?'Origem':'Destino')+' definido');
+let oLbl=null,dLbl=null;
+function placeAt(lon,lat){lon=((lon+180)%360+360)%360-180;const pt={lon,lat};if(placePt==='O'){O=pt;oLbl=null;}else{D=pt;dLbl=null;}refreshRoute();toast((placePt==='O'?'Origem':'Destino')+' definido');
   // auto-advance to destination after origin
   if(placePt==='O'&&!D){placePt='D';syncSeg();} }
 function fmtLL(p){if(!p)return'— toque no mapa —';return Math.abs(p.lat).toFixed(2)+(p.lat>=0?'N':'S')+' '+Math.abs(p.lon).toFixed(2)+(p.lon>=0?'L':'O');}
 function syncSeg(){document.querySelectorAll('#placeSeg button').forEach(b=>b.classList.toggle('act',b.dataset.pt===placePt));}
-function refreshRoute(){$('oTxt').textContent=fmtLL(O);$('dTxt').textContent=fmtLL(D);routeTotal=0;persistRoute();computeEstimate();updateEta();requestDraw();}
+function refreshRoute(){$('oTxt').textContent=oLbl||fmtLL(O);$('dTxt').textContent=dLbl||fmtLL(D);routeTotal=0;persistRoute();computeEstimate();updateEta();requestDraw();}
+// ---- importar voo por número (online, antes de decolar) ----
+function flMsg(t,k){const m=$('flightMsg');if(!m)return;m.textContent=t;m.className='flmsg'+(k?' '+k:'');}
+function fitRoute(){if(!O||!D)return;follow=false;setFollowBtn();
+  let dl=((D.lon-O.lon+540)%360)-180;
+  centerLat=(O.lat+D.lat)/2;centerLon=((O.lon+dl/2+180)%360+360)%360-180;
+  const spanLon=Math.max(2,Math.abs(dl)),spanLat=Math.max(2,Math.abs(D.lat-O.lat));
+  scale=Math.max(minScale,Math.min(maxScale,Math.min(W/(spanLon*1.4),H/(spanLat*1.7))));clampView();requestDraw();}
+async function importFlight(){
+  const inp=$('flightNo');let cs=(inp.value||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
+  if(cs.length<3){flMsg('Digite o número do voo (ex.: LA8084).','warn');return;}
+  $('flightGo').disabled=true;flMsg('Buscando '+cs+'…');
+  try{
+    const r=await fetch('https://api.adsbdb.com/v0/callsign/'+encodeURIComponent(cs),{cache:'no-store'});
+    if(r.status===404){flMsg('Voo '+cs+' não encontrado. Confira o número.','warn');return;}
+    if(!r.ok){flMsg('Erro ao buscar (HTTP '+r.status+'). Tente de novo.','warn');return;}
+    const fr=(await r.json())?.response?.flightroute;
+    if(!fr||!fr.origin||!fr.destination){flMsg('Voo '+cs+' sem rota conhecida.','warn');return;}
+    const o=fr.origin,d=fr.destination,ac=a=>a.iata_code||a.icao_code||'';
+    O={lon:+o.longitude,lat:+o.latitude};D={lon:+d.longitude,lat:+d.latitude};
+    oLbl=ac(o)+' · '+(o.municipality||o.name||'');dLbl=ac(d)+' · '+(d.municipality||d.name||'');
+    placePt='O';syncSeg();refreshRoute();fitRoute();
+    flMsg('✓ '+ac(o)+' → '+ac(d)+'  ·  '+Math.round(gcDist(O,D)).toLocaleString('pt-BR')+' km','ok');
+    toast('Rota '+(fr.callsign_iata||cs)+' importada');
+  }catch(_){flMsg('Sem internet? Não consegui buscar. Importe o voo ANTES de decolar.','warn');}
+  finally{$('flightGo').disabled=false;}
+}
 
 // ---- estimate + tile selection ----
 let curScope='caminho';
@@ -595,7 +636,7 @@ async function downloadTiles(){const{res,strips}=plannedStrips();const todo=stri
 // ---- persistence (guarded for sandbox) ----
 function lsGet(k){try{return localStorage.getItem(k);}catch(_){return null;}}
 function lsSet(k,v){try{localStorage.setItem(k,v);}catch(_){}}
-function persistRoute(){lsSet('nav_route',JSON.stringify({O,D}));}
+function persistRoute(){lsSet('nav_route',JSON.stringify({O,D,oLbl,dLbl}));}
 function persistSaved(){lsSet('nav_saved',JSON.stringify({'10m':[...saved['10m']],'50m':[...saved['50m']]}));}
 function persistLog(){lsSet('nav_mlog',JSON.stringify(mlog.slice(0,40)));}
 function updateSavedUI(){const a=saved['10m'].size,b=saved['50m'].size;const e10=$('sv10'),e50=$('sv50');
@@ -608,6 +649,8 @@ let tT;function toast(m){const t=$('toast');t.textContent=m;t.classList.add('sho
 function openSheet(o){if(o)openGuide(false);$('sheet').classList.toggle('open',o);$('bRoute').classList.toggle('on',o);if(!o){placeArmed=false;}}
 $('bRoute').addEventListener('click',()=>openSheet(!$('sheet').classList.contains('open')));
 $('sheetClose').addEventListener('click',()=>openSheet(false));
+$('flightGo').addEventListener('click',importFlight);
+$('flightNo').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();importFlight();}});
 
 // ---- guide (companion) wiring ----
 function openGuide(o){$('guide').classList.toggle('open',o);$('bGuide').classList.toggle('on',o);if(o){$('sheet').classList.remove('open');$('bRoute').classList.remove('on');updateEta();}}
@@ -617,9 +660,9 @@ $('flyBar').addEventListener('click',()=>openGuide(true));
 $('gMore').addEventListener('click',nextFact);
 document.querySelectorAll('#placeSeg button').forEach(b=>b.addEventListener('click',()=>{placePt=b.dataset.pt;placeArmed=true;syncSeg();toast('Toque no mapa pra marcar '+(placePt==='O'?'a origem':'o destino'));}));
 document.querySelectorAll('#scopeSeg button').forEach(b=>b.addEventListener('click',()=>{curScope=b.dataset.sc;document.querySelectorAll('#scopeSeg button').forEach(x=>x.classList.toggle('act',x===b));computeEstimate();}));
-$('useGps').addEventListener('click',()=>{if(!cur){toast('Sem posição GPS ainda');return;}O={lon:cur.lon,lat:cur.lat};refreshRoute();toast('Origem = posição GPS atual');});
-$('swapPt').addEventListener('click',()=>{const t=O;O=D;D=t;refreshRoute();});
-$('clrRoute').addEventListener('click',()=>{O=D=null;placePt='O';syncSeg();refreshRoute();});
+$('useGps').addEventListener('click',()=>{if(!cur){toast('Sem posição GPS ainda');return;}O={lon:cur.lon,lat:cur.lat};oLbl='GPS · posição atual';refreshRoute();toast('Origem = posição GPS atual');});
+$('swapPt').addEventListener('click',()=>{const t=O;O=D;D=t;const tl=oLbl;oLbl=dLbl;dLbl=tl;refreshRoute();});
+$('clrRoute').addEventListener('click',()=>{O=D=null;oLbl=dLbl=null;placePt='O';syncSeg();refreshRoute();flMsg('');});
 $('clrTiles').addEventListener('click',()=>{hi['10m'].clear();hi['50m'].clear();saved['10m'].clear();saved['50m'].clear();persistSaved();updateSavedUI();computeEstimate();requestDraw();toast('Detalhe apagado');});
 $('dlBtn').addEventListener('click',downloadTiles);
 
@@ -638,7 +681,7 @@ resize();centerLon=0;centerLat=12;scale=fitScale();requestDraw();
 $('clock').textContent=new Date().toISOString().substr(11,5)+'z';
 
 async function restore(){
-  try{const rt=JSON.parse(lsGet('nav_route')||'null');if(rt){O=rt.O;D=rt.D;refreshRoute();}}catch(_){}
+  try{const rt=JSON.parse(lsGet('nav_route')||'null');if(rt){O=rt.O;D=rt.D;oLbl=rt.oLbl||null;dLbl=rt.dLbl||null;refreshRoute();}}catch(_){}
   try{const sv=JSON.parse(lsGet('nav_saved')||'null');if(sv){for(const res of['10m','50m'])for(const s of(sv[res]||[])){try{await loadStrip(res,s);}catch(_){}}updateSavedUI();requestDraw();}}catch(_){}
   try{const lg=JSON.parse(lsGet('nav_mlog')||'null');if(Array.isArray(lg))mlog=lg.filter(m=>m&&m.t&&m.txt).slice(0,40);}catch(_){}
   renderLog();computeEstimate();updateEta();
